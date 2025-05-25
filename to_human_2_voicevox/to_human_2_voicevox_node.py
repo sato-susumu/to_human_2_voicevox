@@ -1,3 +1,4 @@
+import time
 from typing import List
 
 import rclpy
@@ -58,15 +59,20 @@ class ToHuman2VoicevoxNode(Node):
         req = SpeakerService.Request()
         req.text = msg.data
         req.id = self.character_id
-        future = self.client.call_async(req)
-        future.add_done_callback(self._on_speak_response)
 
-    def _on_speak_response(self, future):
+        # 時間計測開始
+        start_time = time.time()
+        future = self.client.call_async(req)
+        future.add_done_callback(lambda fut: self._on_speak_response(fut, start_time))
+
+    def _on_speak_response(self, future, start_time: float) -> None:
+        # 時間計測終了
+        duration = time.time() - start_time
         res = future.result()
         if res is not None and res.success:
-            self.get_logger().info('speak succeeded')
+            self.get_logger().info(f'speak succeeded (took {duration:.3f} sec)')
         else:
-            self.get_logger().error('speak failed')
+            self.get_logger().error(f'speak failed (took {duration:.3f} sec)')
 
 def main() -> None:
     rclpy.init()
