@@ -1,4 +1,5 @@
 import time
+import re
 from typing import List
 
 import rclpy
@@ -15,6 +16,7 @@ DEFAULT_NODE_NAME = 'to_human_2_voicevox'
 DEFAULT_CHARACTER_ID = 2
 DEFAULT_INPUT_TOPIC = '/to_human'
 DEFAULT_OUTPUT_SERVICE_NAME = '/voicevox_ros2/speaker_srv'
+DELIMITERS = '、。！？'
 
 class ToHuman2VoicevoxNode(Node):
     def __init__(self) -> None:
@@ -44,6 +46,10 @@ class ToHuman2VoicevoxNode(Node):
         )
 
         self.get_logger().info(f"Node '{DEFAULT_NODE_NAME}' started. Listening on '{topic}'")
+        
+        # 処理中のフラグ
+        self._is_processing = False
+        self._text_queue = []
 
     def _on_parameter_event(self, params: List[Parameter]) -> SetParametersResult:
         for p in params:
@@ -52,13 +58,56 @@ class ToHuman2VoicevoxNode(Node):
                 self.character_id = p.value
         return SetParametersResult(successful=True)
 
+    def _split_text(self, text: str) -> List[str]:
+        """
+        入力テキストを区切り文字（、。！？）で分割し、区切り文字を末尾に含めた形で返します。
+        連続する区切り文字（例：「！？」）は1つのグループとして扱われます。
+
+        Args:
+            text (str): 分割対象のテキスト
+
+        Returns:
+            List[str]: 区切り文字を含む分割されたテキストのリスト
+
+        例：
+            入力: "こんにちは、元気ですか？今日はいい天気ですね！"
+            出力: ["こんにちは、", "元気ですか？", "今日はいい天気ですね！"]
+        """
+        # 区切り文字のパターンを作成
+        # 例: ([^、。！？]+[、。！？]+|[^、。！？]+$) という正規表現になり、
+        # 「区切り文字以外の文字列 + 区切り文字」または「区切り文字以外の文字列で終わる」パターンにマッチします
+        pattern = f'([^{DELIMITERS}]+[{DELIMITERS}]+|[^{DELIMITERS}]+$)'
+        
+        # 正規表現でマッチした部分を抽出
+        parts = re.findall(pattern, text)
+        return parts
+
     def _on_to_human(self, msg: StdString) -> None:
         self.get_logger().info(f"Received on '{DEFAULT_INPUT_TOPIC}': {msg.data}")
+        
+        # テキストを分割
+        text_parts = self._split_text(msg.data)
+        self._text_queue.extend(text_parts)
+        
+        # まだ処理中でなければ、処理を開始
+        if not self._is_processing:
+            self._process_next_text()
+
+    def _process_next_text(self) -> None:
+        if not self._text_queue:
+            self._is_processing = False
+            return
+
+        self._is_processing = True
+        text = self._text_queue.pop(0)
 
         # 入力文字列をサービスリクエストとして送信
         req = SpeakerService.Request()
-        req.text = msg.data
+        req.text = text
         req.id = self.character_id
+
+        # リクエスト内容をログに出力
+        self.get_logger().info(f'Sending request to SpeakerService: text="{text}", character_id={self.character_id}')
 
         # 時間計測開始
         start_time = time.time()
@@ -73,6 +122,9 @@ class ToHuman2VoicevoxNode(Node):
             self.get_logger().info(f'speak succeeded (took {duration:.3f} sec)')
         else:
             self.get_logger().error(f'speak failed (took {duration:.3f} sec)')
+        
+        # 次のテキストを処理
+        self._process_next_text()
 
 def main() -> None:
     rclpy.init()
